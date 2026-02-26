@@ -1,0 +1,58 @@
+name: Build Python 3.14 (Alpine musl)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-python:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Python in Alpine
+        uses: addnab/docker-run-action@v3
+        with:
+          image: alpine:3.20
+          options: -v ${{ github.workspace }}:/work
+          run: |
+            set -eux
+
+            # 1. 安装构建依赖（在线环境）
+            apk add --no-cache \
+              build-base \
+              openssl-dev \
+              bzip2-dev \
+              xz-dev \
+              readline-dev \
+              sqlite-dev \
+              libffi-dev \
+              zlib-dev \
+              tk-dev \
+              linux-headers
+
+            cd /work
+
+            # 2. 解压 Python 源码
+            tar -xJf Python-3.14.3.tar.xz
+            cd Python-3.14.3
+
+            # 3. 配置 + 编译
+            ./configure \
+              --prefix=/opt/python-3.14.3 \
+              --with-ensurepip=install \
+              --enable-shared \
+              --disable-test-modules
+
+            make -j$(nproc)
+            make install
+
+            # 4. 打包产物
+            tar -czf /work/python-3.14.3-musl.tar.gz -C /opt python-3.14.3
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-3.14.3-musl
+          path: python-3.14.3-musl.tar.gz
