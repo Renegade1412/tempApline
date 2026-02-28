@@ -89,7 +89,10 @@ jobs:
 
             cd /work
             tar -xzf python/python-3.14.3-musl.tar.gz -C /opt
+
+            # 关键修复点：shared Python 在 musl 下必须显式声明库路径
             export PATH=/opt/python-3.14.3/bin:$PATH
+            export LD_LIBRARY_PATH=/opt/python-3.14.3/lib
 
             python3 -m pip install -U pip setuptools wheel
 
