@@ -1,0 +1,64 @@
+name: Build numpy & pandas wheels (Python 3.14, musl)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-wheels:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 1. 下载你已经构建好的 Python 3.14.3（artifact）
+      - name: Download Python 3.14 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: python-3.14.3-musl
+          path: python
+
+      # 2. 在 Alpine 容器中构建 wheel
+      - name: Build numpy & pandas wheels
+        uses: addnab/docker-run-action@v3
+        with:
+          image: alpine:3.20
+          options: -v ${{ github.workspace }}:/work
+          run: |
+            set -eux
+
+            # 2.1 安装构建依赖（仅在 CI）
+            apk add --no-cache \
+              build-base \
+              musl-dev \
+              linux-headers \
+              gfortran \
+              openblas-dev \
+              lapack-dev \
+              python3 \
+              python3-dev \
+              py3-pip
+
+            # 2.2 解压 Python 3.14.3
+            cd /work
+            tar -xzf python/python-3.14.3-musl.tar.gz -C /opt
+
+            export PATH=/opt/python-3.14.3/bin:$PATH
+
+            # 2.3 升级构建工具
+            python3 -m pip install -U pip setuptools wheel
+
+            # 2.4 构建 wheel（不拉依赖、不安装）
+            mkdir -p wheelhouse
+            python3 -m pip wheel \
+              --no-deps \
+              --no-binary=:all: \
+              -r requirements/numpy-pandas.txt \
+              -w wheelhouse
+
+      # 3. 上传 wheel 产物
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: numpy-pandas-cp314-musllinux
+          path: wheelhouse/*.whl
