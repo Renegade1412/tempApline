@@ -106,6 +106,7 @@ jobs:
             mkdir -p wheelhouse
             python3 -m pip wheel \
               --no-deps \
+              --no-build-isolation \              
               numpy==2.0.2 \
               pandas==2.2.1 \
               -w wheelhouse
