@@ -76,7 +76,7 @@ jobs:
           run: |
             set -eux
 
-            # 构建 numpy / pandas 所需系统依赖
+            # 系统级构建依赖
             apk add --no-cache \
               build-base \
               musl-dev \
@@ -93,20 +93,22 @@ jobs:
             cd /work
             tar -xzf python/python-3.14.3-musl.tar.gz -C /opt
 
-            # musl + shared Python 必须显式声明库路径
+            # musl + shared Python 必须设置
             export PATH=/opt/python-3.14.3/bin:$PATH
             export LD_LIBRARY_PATH=/opt/python-3.14.3/lib
 
-            # 升级构建工具
+            # 基础构建工具
             python3 -m pip install -U pip setuptools wheel
 
-            # 关键修复：安装新版 Cython（>= 3.0.10）
+            # 关键：安装新版 Cython（pip build isolation 会忽略 apk 的 cython）
             python3 -m pip install "cython>=3.0.10"
 
             mkdir -p wheelhouse
+
+            # 关键：关闭 build isolation，强制使用当前环境的 Cython
             python3 -m pip wheel \
               --no-deps \
-              --no-build-isolation \              
+              --no-build-isolation \
               numpy==2.0.2 \
               pandas==2.2.1 \
               -w wheelhouse
