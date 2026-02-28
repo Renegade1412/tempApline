@@ -76,6 +76,7 @@ jobs:
           run: |
             set -eux
 
+            # 构建 numpy 2.0 + pandas 所需依赖
             apk add --no-cache \
               build-base \
               musl-dev \
@@ -85,12 +86,15 @@ jobs:
               lapack-dev \
               python3 \
               python3-dev \
-              py3-pip
+              py3-pip \
+              meson \
+              ninja \
+              cython
 
             cd /work
             tar -xzf python/python-3.14.3-musl.tar.gz -C /opt
 
-            # 关键修复点：shared Python 在 musl 下必须显式声明库路径
+            # 关键：musl 下 shared Python 必须显式声明库路径
             export PATH=/opt/python-3.14.3/bin:$PATH
             export LD_LIBRARY_PATH=/opt/python-3.14.3/lib
 
@@ -99,8 +103,7 @@ jobs:
             mkdir -p wheelhouse
             python3 -m pip wheel \
               --no-deps \
-              --no-binary=:all: \
-              numpy==1.26.4 \
+              numpy==2.0.2 \
               pandas==2.2.1 \
               -w wheelhouse
 
