@@ -1,0 +1,65 @@
+name: Build Python 3.14.3 (aarch64, glibc 2.28)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-python-aarch64:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Build Python 3.14.3 in manylinux_2_28_aarch64
+        uses: addnab/docker-run-action@v3
+        with:
+          image: quay.io/pypa/manylinux_2_28_aarch64:latest
+          options: --platform linux/arm64 -v ${{ github.workspace }}:/work
+          run: |
+            set -euxo pipefail
+
+            PY_VER=3.14.3
+            PREFIX=/opt/python-${PY_VER}
+            TARBALL=python-${PY_VER}-glibc228-aarch64.tar.gz
+
+            # 安装构建依赖（EL8 / glibc 2.28）
+            yum -y install \
+              gcc gcc-c++ make \
+              bzip2-devel xz-devel zlib-devel \
+              readline-devel sqlite-devel \
+              openssl-devel libffi-devel \
+              tk-devel ncurses-devel \
+              curl tar
+
+            cd /work
+            curl -fsSLO https://www.python.org/ftp/python/${PY_VER}/Python-${PY_VER}.tar.xz
+            tar -xJf Python-${PY_VER}.tar.xz
+            cd Python-${PY_VER}
+
+            # 关键：让 python 可搬运（优先从自身 lib 目录找 libpython）
+            export LDFLAGS="-Wl,-rpath,'\$ORIGIN/../lib'"
+
+            ./configure \
+              --prefix=${PREFIX} \
+              --enable-shared \
+              --with-ensurepip=install \
+              --enable-optimizations
+
+            make -j$(nproc)
+            make install
+
+            strip ${PREFIX}/bin/python3 || true
+            strip ${PREFIX}/lib/libpython3.14.so.1.0 || true
+
+            tar -czf /work/${TARBALL} -C /opt "python-${PY_VER}"
+
+            ls -lh /work/${TARBALL}
+
+      - name: Upload Python artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-3.14.3-glibc228-aarch64
+          path: python-3.14.3-glibc228-aarch64.tar.gz
