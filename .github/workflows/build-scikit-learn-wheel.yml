@@ -36,14 +36,12 @@ jobs:
               --disable-test-modules
 
             # ---------- 2. 关键：在 make install 之前让新 Python 找到 libpython ----------
-            # ensurepip 在 make install 末尾运行，若找不到 libpython3.11.so.1.0 会静默失败，
-            # 导致 bin/pip 不存在。必须提前 export。
             export LD_LIBRARY_PATH=/opt/python-3.11.7/lib:${LD_LIBRARY_PATH:-}
 
             make -j$(nproc)
             make install
 
-            # ---------- 3. 兜底：若 ensurepip 仍未成功，手动补装 ----------
+            # ---------- 3. 兜底：若 ensurepip 未成功，手动补装 ----------
             /opt/python-3.11.7/bin/python3.11 -m ensurepip --upgrade || true
             /opt/python-3.11.7/bin/python3.11 -m pip install --upgrade pip || true
 
@@ -65,8 +63,8 @@ jobs:
             fi
             echo "OK: no Brotli dependency in Python build output"
 
-            # ---------- 6. 安装 scikit-learn 的构建依赖 ----------
-            pip install --upgrade pip
+            # ---------- 6. 安装 scikit-learn 的构建依赖（含 wheel） ----------
+            pip install --upgrade pip setuptools wheel
             pip install --only-binary=:all: \
               "numpy==1.26.4" \
               "scipy==1.12.0"
@@ -75,7 +73,8 @@ jobs:
               "meson-python==0.16.0" \
               "meson==1.4.0" \
               "ninja==1.11.1.1" \
-              "packaging"
+              "packaging" \
+              "wheel"
 
             # ---------- 7. 安装 BLAS/LAPACK 系统库 ----------
             apk add --no-cache openblas-dev lapack-dev gfortran pkgconfig
