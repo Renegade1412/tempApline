@@ -63,7 +63,7 @@ jobs:
             fi
             echo "OK: no Brotli dependency in Python build output"
 
-            # ---------- 6. 安装 scikit-learn 的构建依赖（含 wheel） ----------
+            # ---------- 6. 安装 scikit-learn 的构建依赖（含 wheel、auditwheel） ----------
             pip install --upgrade pip setuptools wheel
             pip install --only-binary=:all: \
               "numpy==1.26.4" \
@@ -74,12 +74,13 @@ jobs:
               "meson==1.4.0" \
               "ninja==1.11.1.1" \
               "packaging" \
-              "wheel"
+              "wheel" \
+              "auditwheel"
 
             # ---------- 7. 安装 BLAS/LAPACK 系统库 ----------
             apk add --no-cache openblas-dev lapack-dev gfortran pkgconfig
 
-            # ---------- 8. 从源码编译 scikit-learn==1.4.1.post1 的 musllinux wheel ----------
+            # ---------- 8. 从源码编译 scikit-learn==1.4.1.post1 的 wheel ----------
             mkdir -p /work/scikit-learn-wheels
             pip wheel \
               --no-deps \
@@ -92,10 +93,22 @@ jobs:
 
             ls -l /work/scikit-learn-wheels
 
-            # ---------- 9. 打包 Python 产物 ----------
+            # ---------- 9. 修正 wheel 平台标签：linux_x86_64 -> musllinux_1_1_x86_64 ----------
+            mkdir -p /work/scikit-learn-wheels-repaired
+            auditwheel repair /work/scikit-learn-wheels/scikit_learn-1.4.1.post1-cp311-cp311-linux_x86_64.whl \
+              --wheel-dir /work/scikit-learn-wheels-repaired
+
+            rm -f /work/scikit-learn-wheels/*.whl
+            cp /work/scikit-learn-wheels-repaired/*.whl /work/scikit-learn-wheels/
+            rm -rf /work/scikit-learn-wheels-repaired
+
+            echo "=== Final wheel(s) ==="
+            ls -l /work/scikit-learn-wheels
+
+            # ---------- 10. 打包 Python 产物 ----------
             tar -czf /work/python-3.11.7-musl.tar.gz -C /opt python-3.11.7
 
-            # ---------- 10. 修复权限供 runner 用户上传 ----------
+            # ---------- 11. 修复权限供 runner 用户上传 ----------
             chmod -R a+rwX /work
 
       - name: Upload Python artifact
