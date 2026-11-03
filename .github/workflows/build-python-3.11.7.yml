@@ -1,0 +1,67 @@
+name: Build Python 3.11.7 (Alpine musl)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-python:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Python in Alpine
+        uses: addnab/docker-run-action@v3
+        with:
+          image: alpine:3.20
+          options: -v ${{ github.workspace }}:/work
+          run: |
+            set -eux
+            apk add --no-cache \
+              build-base \
+              openssl-dev \
+              bzip2-dev \
+              xz-dev \
+              readline-dev \
+              sqlite-dev \
+              libffi-dev \
+              zlib-dev \
+              tk-dev \
+              linux-headers \
+              curl \
+              gdbm-dev \
+              expat-dev \
+              mpdecimal-dev \
+              ncurses-dev \
+              tcl-dev \
+              binutils
+            cd /work
+            curl -LO https://www.python.org/ftp/python/3.11.7/Python-3.11.7.tar.xz
+            tar -xJf Python-3.11.7.tar.xz
+            cd Python-3.11.7
+            ./configure \
+              --prefix=/opt/python-3.11.7 \
+              --with-ensurepip=install \
+              --enable-shared \
+              --disable-test-modules
+            make -j$(nproc)
+            make install
+
+            # ---- 产物依赖审计：确认没有 Brotli 等意外依赖 ----
+            echo "=== Auditing shared objects under /opt/python-3.11.7 ==="
+            if find /opt/python-3.11.7 -name '*.so*' -exec sh -c \
+                 'readelf -d "$1" 2>/dev/null | grep -qi brotli && echo "$1"' _ {} \; \
+                 | grep -q .; then
+              echo "ERROR: Brotli dependency detected in build output"
+              exit 1
+            fi
+            echo "OK: no Brotli dependency in build output"
+
+            tar -czf /work/python-3.11.7-musl.tar.gz -C /opt python-3.11.7
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-3.11.7-musl
+          path: python-3.11.7-musl.tar.gz
