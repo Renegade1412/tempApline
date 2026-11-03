@@ -1,0 +1,101 @@
+name: Build Python 3.11.7 + scikit-learn 1.4.1.post1 (Alpine musl)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Python and scikit-learn wheel in Alpine
+        uses: addnab/docker-run-action@v3
+        with:
+          image: alpine:3.20
+          options: -v ${{ github.workspace }}:/work
+          run: |
+            set -eux
+
+            # ---------- 1. 编译 Python 3.11.7 的系统依赖 ----------
+            apk add --no-cache \
+              build-base openssl-dev bzip2-dev xz-dev readline-dev sqlite-dev \
+              libffi-dev zlib-dev tk-dev linux-headers curl binutils \
+              gdbm-dev expat-dev mpdecimal-dev ncurses-dev tcl-dev
+
+            cd /work
+            curl -LO https://www.python.org/ftp/python/3.11.7/Python-3.11.7.tar.xz
+            tar -xJf Python-3.11.7.tar.xz
+            cd Python-3.11.7
+            ./configure \
+              --prefix=/opt/python-3.11.7 \
+              --with-ensurepip=install \
+              --enable-shared \
+              --disable-test-modules
+            make -j$(nproc)
+            make install
+            cd /work
+            rm -rf Python-3.11.7 Python-3.11.7.tar.xz
+
+            # ---------- 2. 激活刚编译的 Python 3.11.7 ----------
+            export LD_LIBRARY_PATH=/opt/python-3.11.7/lib:${LD_LIBRARY_PATH:-}
+            export PATH=/opt/python-3.11.7/bin:$PATH
+            python3.11 -V
+            pip -V
+
+            # ---------- 3. Brotli 审计 ----------
+            echo "=== Auditing shared objects under /opt/python-3.11.7 ==="
+            if find /opt/python-3.11.7 -name '*.so*' -exec sh -c \
+                 'readelf -d "$1" 2>/dev/null | grep -qi brotli && echo "$1"' _ {} \; \
+                 | grep -q .; then
+              echo "ERROR: Brotli dependency detected in Python build output"
+              exit 1
+            fi
+            echo "OK: no Brotli dependency in Python build output"
+
+            # ---------- 4. 安装 scikit-learn 的构建依赖（meson-python 工具链） ----------
+            pip install --upgrade pip
+            pip install --only-binary=:all: \
+              "numpy==1.26.4" \
+              "scipy==1.12.0"
+            pip install \
+              "cython==3.0.10" \
+              "meson-python==0.16.0" \
+              "meson==1.4.0" \
+              "ninja==1.11.1.1" \
+              "packaging"
+
+            # ---------- 5. 安装 BLAS/LAPACK 系统库 ----------
+            apk add --no-cache openblas-dev lapack-dev gfortran pkgconfig
+
+            # ---------- 6. 从源码编译 scikit-learn==1.4.1.post1 的 musllinux wheel ----------
+            mkdir -p /work/scikit-learn-wheels
+            pip wheel \
+              --no-deps \
+              --no-binary scikit-learn \
+              --no-build-isolation \
+              --config-settings=setup-args="-Dblas=openblas" \
+              --config-settings=setup-args="-Dlapack=openblas" \
+              --wheel-dir=/work/scikit-learn-wheels \
+              scikit-learn==1.4.1.post1
+
+            ls -l /work/scikit-learn-wheels
+
+            # ---------- 7. 打包 Python 产物 ----------
+            tar -czf /work/python-3.11.7-musl.tar.gz -C /opt python-3.11.7
+
+            # ---------- 8. 修复产物权限，供 runner 用户上传 ----------
+            chmod -R a+rwX /work
+
+      - name: Upload Python artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-3.11.7-musl
+          path: python-3.11.7-musl.tar.gz
+
+      - name: Upload scikit-learn wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: scikit-learn-1.4.1.post1-musllinux
+          path: scikit-learn-wheels/*.whl
