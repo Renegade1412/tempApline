@@ -1,0 +1,31 @@
+name: Build sleep300.so (manylinux2014, glibc<=2.36)
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build in manylinux2014 container
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work \
+            quay.io/pypa/manylinux2014_x86_64 \
+            bash -c '
+              set -eux
+              /opt/python/cp311-cp311/bin/pip install cython
+              /opt/python/cp311-cp311/bin/python setup.py build_ext --inplace
+            '
+
+      - name: List .so
+        run: ls -lh *.so
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sleep300-so-cp311-glibc217-x86_64
+          path: "*.so"
+          if-no-files-found: error
