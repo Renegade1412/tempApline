@@ -1,31 +1,75 @@
-name: Build sleep300.so (manylinux2014, glibc<=2.36)
+name: Build sleep300.so (glibc manylinux2014, x86_64)
 
 on:
-  push:
-    branches: [main, master]
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Build in manylinux2014 container
+      - name: Generate sleep300.py and setup.py
         run: |
-          docker run --rm -v "$PWD:/work" -w /work \
+          mkdir -p build-src
+
+          printf '%s\n' \
+            'import time' \
+            'import logging' \
+            '' \
+            'def sleep300(inputs=None, parameters=None):' \
+            '    print("Starting 300-second countdown...")' \
+            '' \
+            '    for second in range(1, 301):' \
+            '        print(f"Elapsed time: {second} second(s)")' \
+            '        time.sleep(1)' \
+            '' \
+            '    print("300 seconds completed.")' \
+            '    print("sleep 300")' \
+            '    return {"out": "sleep 300"}' \
+            > build-src/sleep300.py
+
+          printf '%s\n' \
+            'from setuptools import setup' \
+            'from Cython.Build import cythonize' \
+            '' \
+            'setup(' \
+            '    ext_modules=cythonize(' \
+            '        ["sleep300.py"],' \
+            '        compiler_directives={"language_level": "3"},' \
+            '    )' \
+            ')' \
+            > build-src/setup.py
+
+          echo "=== sleep300.py ==="
+          cat build-src/sleep300.py
+          echo "=== setup.py ==="
+          cat build-src/setup.py
+
+      - name: Build .so in manylinux2014
+        run: |
+          docker run --rm -v "$PWD:/work" -w /work/build-src \
             quay.io/pypa/manylinux2014_x86_64 \
             bash -c '
               set -eux
-              /opt/python/cp311-cp311/bin/pip install cython
+              /opt/python/cp311-cp311/bin/pip install --upgrade pip
+              /opt/python/cp311-cp311/bin/pip install cython setuptools wheel
               /opt/python/cp311-cp311/bin/python setup.py build_ext --inplace
+              SO=$(ls *.so | head -1)
+              echo "Artifact: $SO"
+              MAX=$(objdump -T "$SO" | sed -n "s/.*GLIBC_\([0-9][0-9.]*\).*/\1/p" | sort -V | tail -1)
+              echo "Max required GLIBC: ${MAX:-unknown}"
+              if [ -n "$MAX" ] && [ "$(printf "%s\n%s\n" "2.36" "$MAX" | sort -V | tail -1)" != "2.36" ]; then
+                echo "ERROR: $SO requires GLIBC_$MAX, target is glibc 2.36"
+                exit 1
+              fi
+              echo "OK: compatible with glibc 2.36"
             '
 
-      - name: List .so
-        run: ls -lh *.so
+      - name: List artifacts
+        run: ls -lh build-src/*.so
 
-      - uses: actions/upload-artifact@v4
+      - name: Upload .so
+        uses: actions/upload-artifact@v4
         with:
           name: sleep300-so-cp311-glibc217-x86_64
-          path: "*.so"
+          path: "build-src/*.so"
           if-no-files-found: error
