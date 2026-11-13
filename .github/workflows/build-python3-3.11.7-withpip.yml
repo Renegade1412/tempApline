@@ -53,6 +53,7 @@ jobs:
             # 升级 pip 到 26.2.2
             # ============================================
             echo "=== Upgrading pip to 26.2.2 ==="
+            export LD_LIBRARY_PATH=/opt/python-3.11.7/lib
             /opt/python-3.11.7/bin/python3.11 -m pip install --upgrade pip==26.2.2
 
             echo "=== Verify pip version ==="
