@@ -1,0 +1,86 @@
+name: Build Python 3.11.7 (manylinux glibc)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-python:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Python in manylinux
+        uses: addnab/docker-run-action@v3
+        with:
+          # 使用 manylinux_2_28 镜像（glibc 2.28，兼容性广）
+          # 如果你希望使用 glibc 2.34，可改为 manylinux_2_34_x86_64
+          image: quay.io/pypa/manylinux_2_28_x86_64
+          options: -v ${{ github.workspace }}:/work
+          run: |
+            set -eux
+
+            # 安装编译依赖（RHEL 系包名）
+            yum install -y \
+              gcc \
+              make \
+              openssl-devel \
+              bzip2-devel \
+              xz-devel \
+              readline-devel \
+              sqlite-devel \
+              libffi-devel \
+              zlib-devel \
+              tk-devel \
+              gdbm-devel \
+              expat-devel \
+              mpdecimal-devel \
+              ncurses-devel \
+              tcl-devel \
+              binutils \
+              curl
+
+            cd /work
+            curl -LO https://www.python.org/ftp/python/3.11.7/Python-3.11.7.tar.xz
+            tar -xJf Python-3.11.7.tar.xz
+            cd Python-3.11.7
+            ./configure \
+              --prefix=/opt/python-3.11.7 \
+              --with-ensurepip=install \
+              --enable-shared \
+              --disable-test-modules
+            make -j$(nproc)
+            make install
+
+            # ============================================
+            # 升级 pip 到 26.2.2
+            # ============================================
+            echo "=== Upgrading pip to 26.2.2 ==="
+            export LD_LIBRARY_PATH=/opt/python-3.11.7/lib
+            /opt/python-3.11.7/bin/python3.11 -m pip install --upgrade pip==26.2.2
+
+            echo "=== Verify pip version ==="
+            /opt/python-3.11.7/bin/python3.11 -m pip --version
+            # 期望输出包含: pip 26.2.2
+
+            # ---- 产物依赖审计：确认没有 Brotli 等意外依赖 ----
+            echo "=== Auditing shared objects under /opt/python-3.11.7 ==="
+            if find /opt/python-3.11.7 -name '*.so*' -exec sh -c \
+                 'readelf -d "$1" 2>/dev/null | grep -qi brotli && echo "$1"' _ {} \; \
+                 | grep -q .; then
+              echo "ERROR: Brotli dependency detected in build output"
+              exit 1
+            fi
+            echo "OK: no Brotli dependency in build output"
+
+            # ============================================
+            # 打包最终产物（已包含 pip 26.2.2）
+            # ============================================
+            tar -czf /work/python-3.11.7-manylinux.tar.gz -C /opt python-3.11.7
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-3.11.7-manylinux
+          path: python-3.11.7-manylinux.tar.gz
