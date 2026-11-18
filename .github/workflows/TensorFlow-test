@@ -1,0 +1,112 @@
+name: Attempt TensorFlow 2.12.0 musllinux build (Alpine)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-tf-musl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build TF 2.12.0 in Alpine musl
+        uses: addnab/docker-run-action@v3
+        with:
+          image: alpine:3.20
+          options: -v ${{ github.workspace }}:/work
+          run: |
+            set -eux
+
+            # ---------- 1. 安装系统依赖 ----------
+            apk add --no-cache \
+              bash build-base cmake curl git openjdk17 musl-dev \
+              openblas-dev openssl-dev zlib-dev libffi-dev \
+              python3 py3-pip py3-numpy py3-numpy-dev py3-wheel \
+              py3-setuptools py3-packaging py3-requests py3-keras-applications \
+              py3-keras-preprocessing patch perl rsync sed swig unzip zip
+
+            # 使用 Alpine 自带的 python3 作为构建期解释器（版本可能较高，但不影响最终 wheel 的 cp311 标签，前提是用 Python 3.11 编译）
+            # 若需严格锁定 Python 3.11，可将下面替换为你已构建的 /opt/python-3.11.7/bin/python3.11
+            python3 -V
+            pip3 install --no-cache-dir wheel
+
+            # ---------- 2. 获取 Bazel 6.5.0（与 2.12.0 兼容）----------
+            BAZEL_VERSION=6.5.0
+            curl -SLO https://github.com/bazelbuild/bazel/releases/download/${BAZEL_VERSION}/bazel-${BAZEL_VERSION}-dist.zip
+            unzip -q bazel-${BAZEL_VERSION}-dist.zip
+            cd bazel-${BAZEL_VERSION}
+            # 在 musl 上从源码 bootstrap Bazel
+            ./compile.sh
+            cp output/bazel /usr/local/bin/bazel
+            bazel --version
+            cd /
+
+            # ---------- 3. 获取 TensorFlow 2.12.0 源码 ----------
+            cd /work
+            git clone --depth 1 --branch v2.12.0 https://github.com/tensorflow/tensorflow.git
+            cd tensorflow
+
+            # ---------- 4. 应用 musl 补丁（关键）----------
+            # Yocto meta-tensorflow 为 2.12.0 提供了 0001-support-musl.patch
+            # 该补丁覆盖了部分 musl 不兼容点，但不一定完整；后续失败需继续手动修补
+            curl -L -o /tmp/0001-support-musl.patch \
+              https://git.yoctoproject.org/meta-tensorflow/plain/recipes-framework/tensorflow/files/0001-support-musl.patch?h=mickledore
+            patch -p1 < /tmp/0001-support-musl.patch || {
+              echo "Patch may have failed or only partially applied. Inspect rejects and continue manually."
+            }
+
+            # 额外手动修补：mallinfo / mallinfo2 在 musl 下不可用
+            # 如果 PR #98766 未包含在 2.12.0 中（大概率没有），需要在此处添加 __GLIBC__ 保护
+            # 示例（请根据实际文件路径和代码调整）：
+            # find tensorflow -name "*.cc" -o -name "*.h" | xargs grep -l "mallinfo" | while read f; do
+            #   sed -i 's/#ifdef __GLIBC__/#if defined(__GLIBC__)/g' "$f"
+            # done
+
+            # ---------- 5. 配置 Bazel musl 构建 ----------
+            # 使用 bazel-contrib/musl-toolchain 或自定义 .bazelrc
+            # 这里采用最简方式：通过环境变量和 --config 触发
+            cat >> .bazelrc <<'EOF'
+build:musl --crosstool_top=@bazel_tools//tools/cpp:toolchain
+build:musl --host_crosstool_top=@bazel_tools//tools/cpp:toolchain
+build:musl --incompatible_enable_cc_toolchain_resolution
+build:musl --define=using_musl=true
+build:musl --copt=-musl
+EOF
+
+            # 更稳妥的方式：引入 bazel-contrib/musl-toolchain
+            # 但那样需要修改 WORKSPACE，复杂度更高；可作为第二阶段升级
+
+            # ---------- 6. 配置 TensorFlow 构建 ----------
+            export PYTHON_BIN_PATH=$(which python3)
+            export PYTHON_LIB_PATH=$($PYTHON_BIN_PATH -c "import site; print(site.getsitepackages()[0])")
+            export TF_NEED_CUDA=0
+            export TF_NEED_ROCM=0
+            export TF_ENABLE_XLA=0
+            export TF_OVERRIDE_EIGEN_STRONG_INLINE=1
+            export TF_SYSTEM_LIBS=""
+            export CC_OPT_FLAGS="-march=native"
+
+            # 运行 configure（需要交互输入，用 yes "" 提供默认值）
+            yes "" | ./configure
+
+            # 覆盖关键路径，确保使用 musl 工具链
+            # 若 configure 检测到的 glibc 标志有问题，可直接在 .tf_configure.bazelrc 中修改
+
+            # ---------- 7. Bazel 构建 wheel ----------
+            # 只构建 CPU 版本，减少失败面
+            bazel build \
+              --config=musl \
+              --config=opt \
+              //tensorflow/tools/pip_package:build_pip_package
+
+            # 生成 wheel
+            ./bazel-bin/tensorflow/tools/pip_package/build_pip_package /work/tf-musl-wheel
+
+            echo "=== Wheels produced ==="
+            ls -l /work/tf-musl-wheel
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: tensorflow-2.12.0-musllinux-attempt
+          path: tf-musl-wheel/*.whl
