@@ -1,4 +1,4 @@
-name: Build Python 3.11.7 (Alpine + glibc for manylinux)
+name: Build Python 3.11.7 (Alpine + glibc, manylinux compatible)
 
 on:
   workflow_dispatch:
@@ -14,12 +14,15 @@ jobs:
       - name: Build Python in Alpine with glibc
         uses: addnab/docker-run-action@v3
         with:
-          # 使用自带 glibc 的 Alpine 镜像
-          # 如果 alpine-3.24.4 标签不存在，可改为 alpine-3.24 或 latest
-          image: frolvlad/alpine-glibc:alpine-3.24.4
+          # 基于 Alpine 3.24 + glibc 2.44，原生支持 manylinux wheel
+          image: sirmark/alpine-glibc:3.24-glibc2.44
           options: -v ${{ github.workspace }}:/work
           run: |
             set -eux
+
+            # 确认 glibc 环境就绪
+            echo "=== Verify glibc is available ==="
+            ldd --version | head -1
 
             # 安装编译依赖（Alpine 包名）
             apk add --no-cache \
@@ -74,20 +77,20 @@ jobs:
             # 确认 Python 链接的是 glibc，而非 musl
             # ============================================
             echo "=== Verify Python is linked against glibc ==="
-            ldd /opt/python-3.11.7/bin/python3.11 | grep -i glibc || true
-            ldd /opt/python-3.11.7/bin/python3.11 | grep -i musl && {
+            if ldd /opt/python-3.11.7/bin/python3.11 | grep -qi musl; then
               echo "ERROR: Python is unexpectedly linked against musl"
               exit 1
-            } || true
-            echo "OK: Python is linked against glibc"
+            fi
+            ldd /opt/python-3.11.7/bin/python3.11 | grep -qi glibc && \
+              echo "OK: Python is linked against glibc"
 
             # ============================================
-            # 尝试安装一个 manylinux wheel 做快速验证
-            # （可选，若网络受限可跳过）
+            # 可选：快速验证 manylinux wheel 安装
+            # 取消注释后可从 PyPI 拉取一个典型的 manylinux 轮子
             # ============================================
             # /opt/python-3.11.7/bin/python3.11 -m pip install --no-cache-dir \
             #   --only-binary=:all: --target /tmp/wheel-test \
-            #   'cryptography==43.0.0'   # 一个典型的 manylinux wheel
+            #   'cryptography==43.0.0'
 
             # ---- 产物依赖审计：确认没有 Brotli 等意外依赖 ----
             echo "=== Auditing shared objects under /opt/python-3.11.7 ==="
