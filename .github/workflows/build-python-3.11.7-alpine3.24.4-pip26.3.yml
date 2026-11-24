@@ -11,7 +11,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build Python in manylinux
+      - name: Build Python Runtime
         uses: addnab/docker-run-action@v3
         with:
           image: quay.io/pypa/manylinux_2_28_x86_64
@@ -20,9 +20,6 @@ jobs:
           run: |
             set -eux
 
-            # ============================================
-            # Install build dependencies
-            # ============================================
             yum install -y \
               gcc \
               make \
@@ -40,87 +37,93 @@ jobs:
               ncurses-devel \
               tcl-devel \
               binutils \
+              findutils \
               curl
 
             cd /work
 
-            # ============================================
-            # Download Python Source
-            # ============================================
-            curl -LO https://www.python.org/ftp/python/3.11.7/Python-3.11.7.tar.xz
+            curl -LO \
+              https://www.python.org/ftp/python/3.11.7/Python-3.11.7.tar.xz
 
             tar -xJf Python-3.11.7.tar.xz
 
             cd Python-3.11.7
 
-            # ============================================
-            # Configure
-            # ============================================
             ./configure \
               --prefix=/opt/python-3.11.7 \
-              --with-ensurepip=install \
               --enable-shared \
+              --with-ensurepip=install \
               --disable-test-modules
 
-            # ============================================
-            # Build
-            # ============================================
             make -j"$(nproc)"
-
             make install
-
-            # ============================================
-            # Upgrade pip only
-            # Keep setuptools bundled version (65.5.0)
-            # ============================================
-            echo "=== Upgrading pip ==="
 
             export LD_LIBRARY_PATH=/opt/python-3.11.7/lib
 
+            echo "=== Upgrade pip ==="
+
             /opt/python-3.11.7/bin/python3.11 \
-              -m pip install --upgrade \
+              -m pip install \
+              --upgrade \
               pip==26.3
 
-            # ============================================
-            # Verify Versions
-            # ============================================
-            echo "=== Verify pip version ==="
+            echo "=== Verify pip ==="
 
             /opt/python-3.11.7/bin/python3.11 \
               -m pip --version
 
-            echo "=== Verify setuptools version ==="
+            echo "=== Collect Runtime Libraries ==="
+
+            mkdir -p /opt/python-3.11.7/runtime-lib
+
+            copy_lib () {
+              find / -name "$1" 2>/dev/null | while read f
+              do
+                cp -av "$f" /opt/python-3.11.7/runtime-lib/ || true
+              done
+            }
+
+            copy_lib "libffi.so*"
+            copy_lib "libsqlite3.so*"
+            copy_lib "libbz2.so*"
+            copy_lib "liblzma.so*"
+            copy_lib "libgdbm.so*"
+            copy_lib "libreadline.so*"
+            copy_lib "libncurses*.so*"
+            copy_lib "libtinfo.so*"
+            copy_lib "libpanel.so*"
+            copy_lib "libexpat.so*"
+            copy_lib "libz.so*"
+            copy_lib "libuuid.so*"
+
+            echo "=== Runtime Libraries ==="
+
+            ls -alh /opt/python-3.11.7/runtime-lib || true
+
+            echo "=== Check manylinux tags ==="
 
             /opt/python-3.11.7/bin/python3.11 \
-              -m pip show setuptools
+              -m pip debug --verbose \
+              | grep -A 20 "Compatible tags"
 
-            # ============================================
-            # Verify supported wheel tags
-            # ============================================
-            echo "=== Verify compatible tags ==="
+            echo "=== Brotli Audit ==="
 
-            /opt/python-3.11.7/bin/python3.11 \
-              -m pip debug --verbose | head -120
-
-            # ============================================
-            # Audit shared objects
-            # Ensure no unexpected Brotli dependency
-            # ============================================
-            echo "=== Auditing shared objects under /opt/python-3.11.7 ==="
-
-            if find /opt/python-3.11.7 -name '*.so*' -exec sh -c \
+            if find /opt/python-3.11.7 \
+              -name '*.so*' \
+              -exec sh -c \
               'readelf -d "$1" 2>/dev/null | grep -qi brotli && echo "$1"' _ {} \; \
-              | grep -q .; then
-              echo "ERROR: Brotli dependency detected in build output"
+              | grep -q .
+            then
+              echo "ERROR: Brotli dependency detected"
               exit 1
             fi
 
-            echo "OK: no Brotli dependency in build output"
+            echo "OK: No Brotli dependency"
 
-            # ============================================
-            # Package Artifact
-            # ============================================
-            tar -czf /work/python-3.11.7-manylinux.tar.gz \
+            echo "=== Package Runtime ==="
+
+            tar -czf \
+              /work/python-3.11.7-manylinux.tar.gz \
               -C /opt \
               python-3.11.7
 
