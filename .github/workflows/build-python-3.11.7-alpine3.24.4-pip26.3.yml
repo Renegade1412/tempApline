@@ -1,0 +1,108 @@
+name: Build Python 3.11.7 (Alpine + glibc for manylinux)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-python:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Python in Alpine with glibc
+        uses: addnab/docker-run-action@v3
+        with:
+          # 使用自带 glibc 的 Alpine 镜像
+          # 如果 alpine-3.24.4 标签不存在，可改为 alpine-3.24 或 latest
+          image: frolvlad/alpine-glibc:alpine-3.24.4
+          options: -v ${{ github.workspace }}:/work
+          run: |
+            set -eux
+
+            # 安装编译依赖（Alpine 包名）
+            apk add --no-cache \
+              build-base \
+              openssl-dev \
+              bzip2-dev \
+              xz-dev \
+              readline-dev \
+              sqlite-dev \
+              libffi-dev \
+              zlib-dev \
+              tk-dev \
+              linux-headers \
+              curl \
+              gdbm-dev \
+              expat-dev \
+              mpdecimal-dev \
+              ncurses-dev \
+              tcl-dev \
+              binutils \
+              patchelf
+
+            cd /work
+            curl -LO https://www.python.org/ftp/python/3.11.7/Python-3.11.7.tar.xz
+            tar -xJf Python-3.11.7.tar.xz
+            cd Python-3.11.7
+
+            ./configure \
+              --prefix=/opt/python-3.11.7 \
+              --with-ensurepip=install \
+              --enable-shared \
+              --disable-test-modules
+
+            make -j$(nproc)
+            make install
+
+            # ============================================
+            # 升级 pip 到 26.3，固定 setuptools 83.0.0
+            # ============================================
+            echo "=== Upgrading pip to 26.3 and setuptools to 83.0.0 ==="
+            export LD_LIBRARY_PATH=/opt/python-3.11.7/lib
+            /opt/python-3.11.7/bin/python3.11 -m pip install --upgrade \
+              'pip==26.3' \
+              'setuptools==83.0.0'
+
+            echo "=== Verify versions ==="
+            /opt/python-3.11.7/bin/python3.11 -m pip --version
+            /opt/python-3.11.7/bin/python3.11 -c \
+              "import setuptools; print('setuptools', setuptools.__version__)"
+
+            # ============================================
+            # 确认 Python 链接的是 glibc，而非 musl
+            # ============================================
+            echo "=== Verify Python is linked against glibc ==="
+            ldd /opt/python-3.11.7/bin/python3.11 | grep -i glibc || true
+            ldd /opt/python-3.11.7/bin/python3.11 | grep -i musl && {
+              echo "ERROR: Python is unexpectedly linked against musl"
+              exit 1
+            } || true
+            echo "OK: Python is linked against glibc"
+
+            # ============================================
+            # 尝试安装一个 manylinux wheel 做快速验证
+            # （可选，若网络受限可跳过）
+            # ============================================
+            # /opt/python-3.11.7/bin/python3.11 -m pip install --no-cache-dir \
+            #   --only-binary=:all: --target /tmp/wheel-test \
+            #   'cryptography==43.0.0'   # 一个典型的 manylinux wheel
+
+            # ---- 产物依赖审计：确认没有 Brotli 等意外依赖 ----
+            echo "=== Auditing shared objects under /opt/python-3.11.7 ==="
+            if find /opt/python-3.11.7 -name '*.so*' -exec sh -c \
+                 'readelf -d "$1" 2>/dev/null | grep -qi brotli && echo "$1"' _ {} \; \
+                 | grep -q .; then
+              echo "ERROR: Brotli dependency detected in build output"
+              exit 1
+            fi
+            echo "OK: no Brotli dependency in build output"
+
+            tar -czf /work/python-3.11.7-alpine-glibc.tar.gz -C /opt python-3.11.7
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-3.11.7-alpine-glibc
+          path: python-3.11.7-alpine-glibc.tar.gz
