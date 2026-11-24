@@ -64,6 +64,8 @@ jobs:
             # ============================================
             echo "=== Upgrading pip to 26.3 and setuptools to 83.0.0 ==="
             export LD_LIBRARY_PATH=/opt/python-3.11.7/lib
+            export SETUPTOOLS_USE_DISTUTILS=stdlib
+
             /opt/python-3.11.7/bin/python3.11 -m pip install --upgrade \
               'pip==26.3' \
               'setuptools==83.0.0'
