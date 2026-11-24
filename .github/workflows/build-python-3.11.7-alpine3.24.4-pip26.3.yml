@@ -44,43 +44,67 @@ jobs:
 
             cd /work
 
+            # ============================================
+            # Download Python Source
+            # ============================================
             curl -LO https://www.python.org/ftp/python/3.11.7/Python-3.11.7.tar.xz
 
             tar -xJf Python-3.11.7.tar.xz
 
             cd Python-3.11.7
 
+            # ============================================
+            # Configure
+            # ============================================
             ./configure \
               --prefix=/opt/python-3.11.7 \
               --with-ensurepip=install \
               --enable-shared \
               --disable-test-modules
 
+            # ============================================
+            # Build
+            # ============================================
             make -j"$(nproc)"
 
             make install
 
             # ============================================
-            # Upgrade pip & setuptools
+            # Upgrade pip only
+            # Keep setuptools bundled version (65.5.0)
             # ============================================
-            echo "=== Upgrading pip and setuptools ==="
+            echo "=== Upgrading pip ==="
 
             export LD_LIBRARY_PATH=/opt/python-3.11.7/lib
 
             /opt/python-3.11.7/bin/python3.11 \
               -m pip install --upgrade \
-              pip==26.3 \
-              setuptools==83.0.0
-
-            echo "=== Verify pip version ==="
-            /opt/python-3.11.7/bin/python3.11 -m pip --version
-
-            echo "=== Verify setuptools version ==="
-            /opt/python-3.11.7/bin/python3.11 \
-              -c "import setuptools;print(setuptools.__version__)"
+              pip==26.3
 
             # ============================================
-            # Audit shared library dependencies
+            # Verify Versions
+            # ============================================
+            echo "=== Verify pip version ==="
+
+            /opt/python-3.11.7/bin/python3.11 \
+              -m pip --version
+
+            echo "=== Verify setuptools version ==="
+
+            /opt/python-3.11.7/bin/python3.11 \
+              -m pip show setuptools
+
+            # ============================================
+            # Verify supported wheel tags
+            # ============================================
+            echo "=== Verify compatible tags ==="
+
+            /opt/python-3.11.7/bin/python3.11 \
+              -m pip debug --verbose | head -120
+
+            # ============================================
+            # Audit shared objects
+            # Ensure no unexpected Brotli dependency
             # ============================================
             echo "=== Auditing shared objects under /opt/python-3.11.7 ==="
 
@@ -94,15 +118,7 @@ jobs:
             echo "OK: no Brotli dependency in build output"
 
             # ============================================
-            # Verify supported wheel tags
-            # ============================================
-            echo "=== Verify supported tags ==="
-
-            /opt/python-3.11.7/bin/python3.11 \
-              -m pip debug --verbose | head -100
-
-            # ============================================
-            # Package artifact
+            # Package Artifact
             # ============================================
             tar -czf /work/python-3.11.7-manylinux.tar.gz \
               -C /opt \
