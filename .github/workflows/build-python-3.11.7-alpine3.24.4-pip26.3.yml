@@ -1,4 +1,4 @@
-name: Build Python 3.11.7 (Alpine + glibc, manylinux compatible)
+name: Build Python 3.11.7 (manylinux glibc)
 
 on:
   workflow_dispatch:
@@ -11,73 +11,44 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Build Python in Alpine with glibc
+      - name: Build Python in manylinux
         uses: addnab/docker-run-action@v3
         with:
-          # 基于 Alpine 3.24 + glibc 2.44
-          image: sirmark/alpine-glibc:3.24-glibc2.44
+          image: quay.io/pypa/manylinux_2_28_x86_64
           options: -v ${{ github.workspace }}:/work
+
           run: |
             set -eux
 
             # ============================================
-            # 0. 环境诊断：确认 glibc 就绪并定位 loader
+            # Install build dependencies
             # ============================================
-            echo "=== Verify glibc is available ==="
-            ldd --version | head -1 || true
-            echo "=== Locate glibc compatibility tree ==="
-            ls -la /usr/glibc-compat/lib 2>/dev/null | head -20 || true
-            ls -la /usr/glibc-compat/lib64 2>/dev/null | head -20 || true
-
-            GLIBC_LD="$(find /usr/glibc-compat -maxdepth 3 \
-              \( -name 'ld-linux-x86-64.so.2' -o -name 'ld.so' \) 2>/dev/null | head -1)"
-            if [ -z "${GLIBC_LD}" ]; then
-              echo "ERROR: glibc loader not found under /usr/glibc-compat"
-              exit 1
-            fi
-            GLIBC_LIB_DIR="$(dirname "${GLIBC_LD}")"
-            echo "GLIBC_LD=${GLIBC_LD}"
-            echo "GLIBC_LIB_DIR=${GLIBC_LIB_DIR}"
-
-            # 安装编译依赖（Alpine 包名）
-            apk add --no-cache \
-              build-base \
-              openssl-dev \
-              bzip2-dev \
-              xz-dev \
-              readline-dev \
-              sqlite-dev \
-              libffi-dev \
-              zlib-dev \
-              tk-dev \
-              linux-headers \
-              curl \
-              gdbm-dev \
-              expat-dev \
-              mpdecimal-dev \
-              ncurses-dev \
-              tcl-dev \
+            yum install -y \
+              gcc \
+              make \
+              openssl-devel \
+              bzip2-devel \
+              xz-devel \
+              readline-devel \
+              sqlite-devel \
+              libffi-devel \
+              zlib-devel \
+              tk-devel \
+              gdbm-devel \
+              expat-devel \
+              mpdecimal-devel \
+              ncurses-devel \
+              tcl-devel \
               binutils \
-              patchelf
+              curl
 
             cd /work
-            curl -LO https://www.python.org/ftp/python/3.11.7/Python-3.11.7.tar.xz
-            tar -xJf Python-3.11.7.tar.xz
-            cd Python-3.11.7
 
-            # ============================================
-            # 1. 关键：把编译/链接强制指向 glibc
-            #    -I  glibc 头文件
-            #    -L  glibc 库
-            #    -rpath 烧录运行时库搜索路径
-            #    --dynamic-linker 烧录 glibc loader（否则解释器仍是 musl 的）
-            # ============================================
-            export CPPFLAGS="-I/usr/glibc-compat/include ${CPPFLAGS:-}"
-            export LDFLAGS="-L${GLIBC_LIB_DIR} \
-              -Wl,-rpath,${GLIBC_LIB_DIR} \
-              -Wl,--dynamic-linker=${GLIBC_LD} \
-              ${LDFLAGS:-}"
-            export LD_LIBRARY_PATH="${GLIBC_LIB_DIR}:/opt/python-3.11.7/lib"
+            curl -LO https://www.python.org/ftp/python/3.11.7/Python-3.11.7.tar.xz
+
+            tar -xJf Python-3.11.7.tar.xz
+
+            cd Python-3.11.7
 
             ./configure \
               --prefix=/opt/python-3.11.7 \
@@ -85,69 +56,60 @@ jobs:
               --enable-shared \
               --disable-test-modules
 
-            make -j$(nproc)
+            make -j"$(nproc)"
+
             make install
 
             # ============================================
-            # 2. 验证可执行文件的 interpreter 与 NEEDED
+            # Upgrade pip & setuptools
             # ============================================
-            PY=/opt/python-3.11.7/bin/python3.11
-            echo "=== Check ELF interpreter ==="
-            readelf -l "$PY" | grep -i 'interpreter' || true
-            echo "=== Check DT_NEEDED libc ==="
-            readelf -d "$PY" | grep -Ei 'NEEDED|RPATH|RUNPATH' || true
+            echo "=== Upgrading pip and setuptools ==="
 
-            if ! readelf -d "$PY" | grep -q 'libc\.so\.6'; then
-              echo "WARNING: Python is NOT linked against glibc, attempting patchelf fix"
-              patchelf --set-interpreter "${GLIBC_LD}" \
-                       --set-rpath "${GLIBC_LIB_DIR}:/opt/python-3.11.7/lib" \
-                       "$PY"
-              # patchelf 只能改 interpreter/rpath，无法改 NEEDED；若仍无 libc.so.6 则失败
-              if ! readelf -d "$PY" | grep -q 'libc\.so\.6'; then
-                echo "ERROR: Python is still not linked against glibc after patchelf"
-                readelf -d "$PY"
-                exit 1
-              fi
-            fi
-            if readelf -d "$PY" | grep -qi 'libc\.musl'; then
-              echo "ERROR: Python is unexpectedly linked against musl (libc.musl-*)"
-              exit 1
-            fi
-            echo "OK: Python is linked against glibc"
+            export LD_LIBRARY_PATH=/opt/python-3.11.7/lib
+
+            /opt/python-3.11.7/bin/python3.11 \
+              -m pip install --upgrade \
+              pip==26.3 \
+              setuptools==83.0.0
+
+            echo "=== Verify pip version ==="
+            /opt/python-3.11.7/bin/python3.11 -m pip --version
+
+            echo "=== Verify setuptools version ==="
+            /opt/python-3.11.7/bin/python3.11 \
+              -c "import setuptools;print(setuptools.__version__)"
 
             # ============================================
-            # 3. 升级 pip 到 26.3，固定 setuptools 83.0.0
-            #    SETUPTOOLS_USE_DISTUTILS=stdlib 绕开 _distutils_hack 断言
-            # ============================================
-            echo "=== Upgrading pip to 26.3 and setuptools to 83.0.0 ==="
-            export SETUPTOOLS_USE_DISTUTILS=stdlib
-            "$PY" -m pip install --upgrade \
-              'pip==26.3' \
-              'setuptools==83.0.0'
-
-            echo "=== Verify versions ==="
-            "$PY" -m pip --version
-            "$PY" -c "import setuptools; print('setuptools', setuptools.__version__)"
-
-            # ============================================
-            # 4. 产物依赖审计：确认没有 Brotli 等意外依赖
+            # Audit shared library dependencies
             # ============================================
             echo "=== Auditing shared objects under /opt/python-3.11.7 ==="
+
             if find /opt/python-3.11.7 -name '*.so*' -exec sh -c \
-                 'readelf -d "$1" 2>/dev/null | grep -qi brotli && echo "$1"' _ {} \; \
-                 | grep -q .; then
+              'readelf -d "$1" 2>/dev/null | grep -qi brotli && echo "$1"' _ {} \; \
+              | grep -q .; then
               echo "ERROR: Brotli dependency detected in build output"
               exit 1
             fi
+
             echo "OK: no Brotli dependency in build output"
 
             # ============================================
-            # 5. 打包最终产物
+            # Verify supported wheel tags
             # ============================================
-            tar -czf /work/python-3.11.7-alpine-glibc.tar.gz -C /opt python-3.11.7
+            echo "=== Verify supported tags ==="
+
+            /opt/python-3.11.7/bin/python3.11 \
+              -m pip debug --verbose | head -100
+
+            # ============================================
+            # Package artifact
+            # ============================================
+            tar -czf /work/python-3.11.7-manylinux.tar.gz \
+              -C /opt \
+              python-3.11.7
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: python-3.11.7-alpine-glibc
-          path: python-3.11.7-alpine-glibc.tar.gz
+          name: python-3.11.7-manylinux
+          path: python-3.11.7-manylinux.tar.gz
